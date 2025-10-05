@@ -1,0 +1,13 @@
+services:
+  app:
+    build:
+      target: development
+    user: "0:0" # Run as root in development to avoid volume mount permission issues
+    environment:
+      - NODE_ENV=development
+    volumes:
+      - ./:/app:delegated
+      - /app/node_modules
+    command: npm run dev
+    ports:
+      - "3000:3000"

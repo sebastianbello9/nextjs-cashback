@@ -1,0 +1,80 @@
+name: Production Deployment
+on:
+  push:
+    branches: [develop, main, master]
+    paths:
+      - "src/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "Dockerfile"
+      - ".github/workflows/**"
+
+jobs:
+  test:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+      - name: Run Playwright tests
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 30
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build --if-present
+      - name: Check Docker availability
+        id: docker-check
+        run: |
+          if command -v docker &> /dev/null; then
+            echo "available=true" >> $GITHUB_OUTPUT
+            echo "Docker is available"
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "Docker not available (likely running with act)"
+          fi
+
+      - name: Build docker image for scan
+        if: steps.docker-check.outputs.available == 'true'
+        run: docker build -t nextjs-cashback:ci .
+
+      - name: Run Trivy vulnerability scanner
+        if: steps.docker-check.outputs.available == 'true'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: nextjs-cashback:ci
+          format: table
+          exit-code: 1
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Trigger Render deploy hook
+        run: |
+          curl -X POST "$RENDER_DEPLOY_HOOK"
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
